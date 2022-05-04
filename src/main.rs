@@ -1,10 +1,13 @@
-use regex_syntax::hir::{Hir, HirKind, Literal};
+use regex_syntax::hir::{Hir, HirKind, Literal, RepetitionKind};
 
 fn main() {
-    let hir = regex_syntax::Parser::new().parse("a(bc|bd)*(e|f)").unwrap();
+    let hir = regex_syntax::Parser::new()
+        .parse("a(bc|bd?)+(e|f)")
+        .unwrap();
     let mut nfa = Nfa::default();
     let start = nfa.new_state();
-    let end = regex_to_nfa(&mut nfa, &hir, start);
+    let end = nfa.new_state();
+    regex_to_nfa(&mut nfa, &hir, start, end);
     print_dot(&nfa, start, end);
 }
 
@@ -68,40 +71,51 @@ impl Nfa {
     }
 }
 
-fn regex_to_nfa(nfa: &mut Nfa, r: &Hir, mut start: State) -> State {
+fn regex_to_nfa(nfa: &mut Nfa, r: &Hir, mut start: State, end: State) {
     match r.kind() {
-        HirKind::Empty => start,
+        HirKind::Empty => nfa.add_transition(start, Transition::Goto(end)),
         HirKind::Class(_) => unimplemented!("character classes not supported"),
-        HirKind::Group(g) => regex_to_nfa(nfa, &g.hir, start),
+        HirKind::Group(g) => regex_to_nfa(nfa, &g.hir, start, end),
         HirKind::Anchor(_) => unimplemented!("anchors not supported"),
         HirKind::Concat(xs) => {
-            for x in xs {
-                start = regex_to_nfa(nfa, x, start);
+            for (i, x) in xs.iter().enumerate() {
+                let next = if i == xs.len() - 1 {
+                    end
+                } else {
+                    nfa.new_state()
+                };
+                regex_to_nfa(nfa, x, start, next);
+                start = next;
             }
-            start
         }
         HirKind::Literal(lit) => {
-            let next = nfa.new_state();
             let c = match lit {
                 Literal::Unicode(c) => *c,
                 Literal::Byte(b) => *b as char,
             };
-            nfa.add_transition(start, Transition::Consume(c, next));
-            next
+            nfa.add_transition(start, Transition::Consume(c, end));
         }
-        HirKind::Repetition(rep) => {
-            // TODO: repetition types
-            let next = regex_to_nfa(nfa, &rep.hir, start);
-            nfa.add_transition(next, Transition::Goto(start));
-            next
-        }
-        HirKind::Alternation(branches) => {
-            let end = nfa.new_state();
-            for branch in branches {
-                let next = regex_to_nfa(nfa, branch, start);
-                nfa.add_transition(next, Transition::Goto(end));
+        HirKind::Repetition(rep) => match rep.kind {
+            RepetitionKind::ZeroOrOne => {
+                regex_to_nfa(nfa, &rep.hir, start, end);
+                nfa.add_transition(start, Transition::Goto(end));
             }
-            end
+            RepetitionKind::ZeroOrMore => {
+                regex_to_nfa(nfa, &rep.hir, start, end);
+                nfa.add_transition(end, Transition::Goto(start));
+            }
+            RepetitionKind::OneOrMore => {
+                let intermediate = nfa.new_state();
+                regex_to_nfa(nfa, &rep.hir, start, intermediate);
+                regex_to_nfa(nfa, &rep.hir, intermediate, end);
+                nfa.add_transition(end, Transition::Goto(intermediate));
+            }
+            RepetitionKind::Range(_) => unimplemented!(),
+        },
+        HirKind::Alternation(branches) => {
+            for branch in branches {
+                regex_to_nfa(nfa, branch, start, end);
+            }
         }
         HirKind::WordBoundary(_) => unimplemented!("word boundary not supported"),
     }
