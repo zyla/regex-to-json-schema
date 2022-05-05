@@ -1,18 +1,32 @@
+use clap::{Parser, Subcommand};
+use regex_syntax::hir::{Hir, HirKind, Literal, RepetitionKind};
 use std::collections::VecDeque;
 
-use regex_syntax::hir::{Hir, HirKind, Literal, RepetitionKind};
+#[derive(Parser)]
+struct Args {
+    #[clap(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Convert the regular expression to NFA, and output it in DOT format.
+    Nfa { regex: String },
+}
 
 fn main() {
-    let hir = regex_syntax::Parser::new()
-        //.parse("(Krzysi|Piotr)(ek|uś)")
-        .parse("b?a(na)*n(as)?")
-        .unwrap();
-    let mut nfa = Nfa::default();
-    let start = nfa.new_state();
-    let end = nfa.new_state();
-    regex_to_nfa(&mut nfa, &hir, start, end);
-    let state_mapping = renumber_states(&nfa, start);
-    print_dot(&nfa, &state_mapping, start, end);
+    let args = Args::parse();
+    match args.command {
+        Command::Nfa { regex } => {
+            let hir = regex_syntax::Parser::new().parse(&regex).unwrap();
+            let mut nfa = Nfa::default();
+            let start = nfa.new_state();
+            let end = nfa.new_state();
+            regex_to_nfa(&mut nfa, &hir, start, end);
+            let state_mapping = renumber_states(&nfa, start);
+            print_dot(&nfa, &state_mapping, start, end);
+        }
+    }
 }
 
 fn print_dot(nfa: &Nfa, state_mapping: &[State], start: State, end: State) {
