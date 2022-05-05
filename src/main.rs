@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use regex_syntax::hir::{Hir, HirKind, Literal, RepetitionKind};
+use schemars::schema::{ArrayValidation, RootSchema, Schema, SchemaObject, SubschemaValidation};
 use std::collections::VecDeque;
 
 #[derive(Parser)]
@@ -12,21 +13,35 @@ struct Args {
 enum Command {
     /// Convert the regular expression to NFA, and output it in DOT format.
     Nfa { regex: String },
+
+    /// Convert the regular expression to JSON Schema.
+    /// To use the resulting schema, convert input string using the `convert-input` command.
+    JsonSchema { regex: String },
 }
 
 fn main() {
     let args = Args::parse();
     match args.command {
         Command::Nfa { regex } => {
-            let hir = regex_syntax::Parser::new().parse(&regex).unwrap();
-            let mut nfa = Nfa::default();
-            let start = nfa.new_state();
-            let end = nfa.new_state();
-            regex_to_nfa(&mut nfa, &hir, start, end);
+            let (nfa, start, end) = generate_nfa(&regex);
             let state_mapping = renumber_states(&nfa, start);
             print_dot(&nfa, &state_mapping, start, end);
         }
+        Command::JsonSchema { regex } => {
+            let (nfa, start, end) = generate_nfa(&regex);
+            let schema = to_json_schema(&nfa, start, end);
+            serde_json::to_writer_pretty(std::io::stdout().lock(), &schema).unwrap();
+        }
     }
+}
+
+fn generate_nfa(regex: &str) -> (Nfa, State, State) {
+    let hir = regex_syntax::Parser::new().parse(&regex).unwrap();
+    let mut nfa = Nfa::default();
+    let start = nfa.new_state();
+    let end = nfa.new_state();
+    regex_to_nfa(&mut nfa, &hir, start, end);
+    (nfa, start, end)
 }
 
 fn print_dot(nfa: &Nfa, state_mapping: &[State], start: State, end: State) {
@@ -168,4 +183,80 @@ fn renumber_states(nfa: &Nfa, start: State) -> Vec<State> {
         }
     }
     state_mapping
+}
+
+fn to_json_schema(nfa: &Nfa, start: State, end: State) -> RootSchema {
+    RootSchema {
+        meta_schema: None,
+        schema: transition_to_schema(&Transition::Goto(start)),
+        definitions: nfa
+            .states
+            .iter()
+            .enumerate()
+            .map(|(state, transitions)| {
+                (
+                    to_state_name(state),
+                    SchemaObject {
+                        subschemas: Some(Box::new(SubschemaValidation {
+                            one_of: Some(
+                                transitions
+                                    .iter()
+                                    .map(|x| transition_to_schema(x).into())
+                                    .chain(
+                                        if state == end {
+                                            vec![end_schema()]
+                                        } else {
+                                            vec![]
+                                        }
+                                        .into_iter(),
+                                    )
+                                    .collect(),
+                            ),
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    }
+                    .into(),
+                )
+            })
+            .collect(),
+    }
+}
+
+fn end_schema() -> Schema {
+    SchemaObject {
+        const_value: Some((&[] as &[()]).into()),
+        ..Default::default()
+    }
+    .into()
+}
+
+fn transition_to_schema(t: &Transition) -> SchemaObject {
+    match *t {
+        Transition::Goto(target) => SchemaObject {
+            reference: Some(to_state_name(target)),
+            ..Default::default()
+        },
+        Transition::Consume(c, target) => SchemaObject {
+            array: Some(Box::new(ArrayValidation {
+                items: Some(
+                    vec![
+                        SchemaObject {
+                            const_value: Some(c.to_string().into()),
+                            ..Default::default()
+                        }
+                        .into(),
+                        transition_to_schema(&Transition::Goto(target)).into(),
+                    ]
+                    .into(),
+                ),
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+    }
+}
+
+fn to_state_name(s: State) -> String {
+    format!("S{}", s)
 }
