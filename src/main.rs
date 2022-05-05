@@ -54,7 +54,7 @@ fn encode_input(input: &str) -> Value {
 }
 
 fn generate_nfa(regex: &str) -> (Nfa, State, State) {
-    let hir = regex_syntax::Parser::new().parse(&regex).unwrap();
+    let hir = regex_syntax::Parser::new().parse(regex).unwrap();
     let mut nfa = Nfa::default();
     let start = nfa.new_state();
     let end = nfa.new_state();
@@ -66,8 +66,8 @@ fn print_dot(nfa: &Nfa, state_mapping: &[State], start: State, end: State) {
     println!("digraph {{");
     println!("rankdir=LR");
     println!("\"\" [shape=none]");
-    for state in 0..nfa.num_states() {
-        println!("{} [label=\"{}\"]", state, state_mapping[state]);
+    for (state, number) in state_mapping.iter().enumerate() {
+        println!("{} [label=\"{}\"]", state, number);
     }
     println!("\"\" -> {}", start);
     for (from, transitions) in nfa.states.iter().enumerate() {
@@ -100,17 +100,9 @@ enum Transition {
     Consume(char, State),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct Nfa {
     states: Vec<Vec<Transition>>,
-}
-
-impl Default for Nfa {
-    fn default() -> Self {
-        Self {
-            states: Default::default(),
-        }
-    }
 }
 
 impl Nfa {
@@ -227,8 +219,7 @@ fn to_json_schema(nfa: &Nfa, start: State, end: State) -> RootSchema {
                                 .into_iter(),
                             )
                             .collect(),
-                    )
-                    .into(),
+                    ),
                 )
             })
             .collect(),
